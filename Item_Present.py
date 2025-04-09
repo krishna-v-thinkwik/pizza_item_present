@@ -51,15 +51,16 @@ def check_order():
     if score < 70:
         return f"Sorry! We do not have '{name.title()}' pizza in our menu. But instead we have '{matched_name}' pizza. Would you like to try that?"
 
-    matched_items = [row for row in data if row['Name'].lower() == matched_name.lower()]
-    matched_sizes = [row for row in matched_items if row['Size'].lower() == size.lower()]
+    # ✅ Fixed: apply .strip().lower() for robust matching
+    matched_items = [row for row in data if row['Name'].strip().lower() == matched_name.strip().lower()]
+    matched_sizes = [row for row in matched_items if row['Size'].strip().lower() == size.strip().lower()]
     if not matched_sizes:
-        available_sizes = list(set(row['Size'] for row in matched_items))
+        available_sizes = list(set(row['Size'].strip() for row in matched_items))
         return f"Sorry! '{matched_name}' is not available in '{size.title()}'. Available sizes are: {', '.join(available_sizes)}."
 
-    matched_crusts = [row for row in matched_sizes if row['Crust'].lower() == crust.lower()]
+    matched_crusts = [row for row in matched_sizes if row['Crust'].strip().lower() == crust.strip().lower()]
     if not matched_crusts:
-        available_crusts = list(set(row['Crust'] for row in matched_sizes))
+        available_crusts = list(set(row['Crust'].strip() for row in matched_sizes))
         return f"Sorry! '{matched_name}' in '{size.title()}' is not available with '{crust.title()}'. Available crusts are: {', '.join(available_crusts)}."
 
     return f"Yes! '{matched_name}' is available in '{size.title()}' with '{crust.title()}' crust."
