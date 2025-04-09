@@ -4,11 +4,11 @@ from oauth2client.service_account import ServiceAccountCredentials
 from fuzzywuzzy import process  # For typo tolerance
 import json
 import os
+
 app = Flask(__name__)
 
 # Google Sheets setup
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-
 
 service_account_info = json.loads(os.environ["GOOGLE_CREDS_JSON"])
 creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
@@ -19,6 +19,12 @@ client = gspread.authorize(creds)
 sheet = client.open("menu").worksheet("pizza menu")
 data = sheet.get_all_records()
 
+# ✅ Root route to prevent 404 on Render
+@app.route('/')
+def home():
+    return "✅ Pizza order checker is live and working! Use POST /check_order."
+
+# 🍕 Order checking logic
 @app.route('/check_order', methods=['POST'])
 def check_order():
     order = request.json.get("order", "").lower()
@@ -58,5 +64,6 @@ def check_order():
 
     return f"Yes! '{matched_name}' is available in '{size.title()}' with '{crust.title()}' crust."
 
+# 🔥 Run the app
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
