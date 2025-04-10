@@ -3,10 +3,9 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
 import os
-import re
-from dotenv import load_dotenv
 
-load_dotenv()
+
+
 app = Flask(__name__)
 
 # Setup Google Sheets
