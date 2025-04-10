@@ -1,70 +1,120 @@
 from flask import Flask, request
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from fuzzywuzzy import process  # For typo tolerance
 import json
 import os
+import re
+from dotenv import load_dotenv
 
+load_dotenv()
 app = Flask(__name__)
 
-# Google Sheets setup
+# Setup Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-
 service_account_info = json.loads(os.environ["GOOGLE_CREDS_JSON"])
 creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
-
 client = gspread.authorize(creds)
-
-# Load your actual sheet
 sheet = client.open("menu").worksheet("pizza menu")
 data = sheet.get_all_records()
 
-# ✅ Root route to prevent 404 on Render
 @app.route('/')
 def home():
-    return "✅ Pizza order checker is live and working! Use POST /check_order."
+    return "✅ Pizza order API is live."
 
-# 🍕 Order checking logic
 @app.route('/check_order', methods=['POST'])
 def check_order():
-    order = request.json.get("order", "").lower()
+    input_data = request.get_json()
 
-    name = ""
-    size = ""
-    crust = ""
-    item_type = ""
+    names_raw = input_data.get("PizzaName", "").lower().strip()
+    sizes_raw = input_data.get("PizzaSize", "").lower().strip()
+    crusts_raw = input_data.get("PizzaCrust", "").lower().strip()
+    toppings_raw = input_data.get("PizzaToppings", "").lower().strip()
+    pizza_type = input_data.get("PizzaType", "").lower().strip()
 
-    words = order.split()
+    def singularize(word):
+        word = word.strip().lower()
+        return word[:-1] if word.endswith('s') and not word.endswith('ss') else word
 
-    for i in range(len(words)):
-        if words[i].isnumeric():
+    pizza_orders = re.findall(r'(\d+)\s+([a-zA-Z ]+?)(?=\s*(?:and|$))', names_raw)
+    pizza_orders = [(qty, singularize(name)) for qty, name in pizza_orders]
+
+    sizes = [singularize(s.strip()) for s in (sizes_raw.split(" and ") if " and " in sizes_raw else [sizes_raw])]
+    crusts = [singularize(c.strip()) for c in (crusts_raw.split(" and ") if " and " in crusts_raw else [crusts_raw])]
+    toppings_input = [singularize(t.strip()) for t in (toppings_raw.split(" and ") if " and " in toppings_raw else [toppings_raw])]
+
+    # Fetch all toppings from the menu
+    topping_column = "Toppings veg" if pizza_type == "veg" else "Toppings non veg"
+    all_toppings = set()
+    for row in data:
+        if topping_column in row and row[topping_column]:
+            toppings = [singularize(t) for t in row[topping_column].split(",") if t.strip()]
+            all_toppings.update(toppings)
+
+    # Smarter fuzzy topping match
+    valid_toppings = []
+    invalid_toppings = []
+
+    for topping in toppings_input:
+        found = False
+        for available in all_toppings:
+            if topping in available or available in topping:
+                valid_toppings.append(available)
+                found = True
+                break
+        if not found:
+            invalid_toppings.append(topping)
+
+    # Start building the response
+    response = []
+    all_available = True
+
+    for idx, (qty, name) in enumerate(pizza_orders):
+        size = sizes[idx] if idx < len(sizes) else sizes[0] if sizes else ""
+        crust = crusts[idx] if idx < len(crusts) else crusts[0] if crusts else ""
+
+        matched_items = [row for row in data if singularize(row['Name']) == name and row['Type'].strip().lower() == pizza_type]
+
+        if not matched_items:
+            available_same_type_pizzas = sorted(set(
+                row['Name'] for row in data if row['Type'].strip().lower() == pizza_type
+            ))
+            response.append(
+                f"Sorry! we do not have {name.title()} pizza in our menu. However, here are some {pizza_type.title()} pizzas you can choose from: {', '.join(available_same_type_pizzas)}."
+            )
+            all_available = False
             continue
-        name = words[i]
-        size = words[i+1] if i+1 < len(words) else ""
-        crust = " ".join(words[i+2:-1]) if i+2 < len(words)-1 else ""
-        item_type = words[-1]
-        break
 
-    all_names = list(set(row['Name'] for row in data))
-    matched_name, score = process.extractOne(name, all_names)
+        matched_by_size = [row for row in matched_items if singularize(row['Size']) == size]
+        if not matched_by_size:
+            available_sizes = sorted(set(row['Size'] for row in matched_items))
+            response.append(
+                f"We do not have {name.title()} pizza in {size.title()} size but we do have it in {', '.join(s.title() for s in available_sizes)}."
+            )
+            all_available = False
+            continue
 
-    if score < 70:
-        return f"Sorry! We do not have '{name.title()}' pizza in our menu. But instead we have '{matched_name}' pizza. Would you like to try that?"
+        matched_by_crust = [row for row in matched_by_size if singularize(row['Crust']) == crust]
+        if not matched_by_crust:
+            available_crusts = sorted(set(row['Crust'] for row in matched_by_size))
+            response.append(
+                f"{name.title()} in {size.title()} size is not available with '{crust.title()}' crust. Available crusts: {', '.join(c.title() for c in available_crusts)}."
+            )
+            all_available = False
+            continue
 
-    # ✅ Fixed: apply .strip().lower() for robust matching
-    matched_items = [row for row in data if row['Name'].strip().lower() == matched_name.strip().lower()]
-    matched_sizes = [row for row in matched_items if row['Size'].strip().lower() == size.strip().lower()]
-    if not matched_sizes:
-        available_sizes = list(set(row['Size'].strip() for row in matched_items))
-        return f"Sorry! '{matched_name}' is not available in '{size.title()}'. Available sizes are: {', '.join(available_sizes)}."
+    # Final overall availability
+    if all_available:
+        response.append("The items you ordered are available in our menu.")
 
-    matched_crusts = [row for row in matched_sizes if row['Crust'].strip().lower() == crust.strip().lower()]
-    if not matched_crusts:
-        available_crusts = list(set(row['Crust'].strip() for row in matched_sizes))
-        return f"Sorry! '{matched_name}' in '{size.title()}' is not available with '{crust.title()}'. Available crusts are: {', '.join(available_crusts)}."
+    # Toppings summary
+    if invalid_toppings:
+        response.append(
+            f"Toppings not available: {', '.join(invalid_toppings)}. But we do have these available: {', '.join(sorted(all_toppings))}."
+        )
+    elif valid_toppings:
+        response.append(f"Toppings available: {', '.join(sorted(set(valid_toppings)))}.")
 
-    return f"Yes! '{matched_name}' is available in '{size.title()}' with '{crust.title()}' crust."
+    return "\n".join(response)
 
-# 🔥 Run the app
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
